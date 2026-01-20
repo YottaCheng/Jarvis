@@ -22,7 +22,7 @@ try:
     
     for m in client.models.list():
         # 这里的 .name 就是我们要填进 main.py 的真实 ID
-        if "gemini" in m.name:
+        if "gemini" in m.name or "gemma" in m.name:
             print(f"{m.name:<40} | {m.display_name}")
 
 except Exception as e:

@@ -1,3 +1,4 @@
+# config/settings.py
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -14,9 +15,13 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 OWNER_ID = "U0A9B5ETMFF"
 
-# 🔥 核心：接收 Launcher 注入的环境变量
-# 默认值设为 gemini-2.5-flash (因为你测出来这个能用)
-MODEL_ID = os.getenv("JARVIS_MODEL_OVERRIDE", "gemini-2.5-flash")
+# 🔥 [Cortex / 大脑]
+# 处理复杂任务 (工具调用、长逻辑)，继续使用你刚才测试通过的 Gemini 2.5
+MODEL_ID = os.getenv("JARVIS_MODEL_OVERRIDE", "models/gemini-2.5-flash")
+
+# 🔥 [Router / 小脑] 
+# 处理闲聊、意图识别。使用你刚确认的 Gemma 3 27B
+ROUTER_MODEL = "models/gemma-3-27b-it"
 
 MEMORY_FILE = DATA_DIR / "memory.json"
 STATE_FILE = DATA_DIR / "user_state.json"

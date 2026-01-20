@@ -4,7 +4,7 @@ import threading
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 # 注意：配置和日志要晚一点引入，等环境变量设置好
-
+"""
 # --- 🚀 启动阶段 1: 神经选择 ---
 print("💻 Booting Interface...")
 try:
@@ -23,7 +23,7 @@ except ImportError:
     print("⚠️ Launcher not found, using default settings.")
 except Exception as e:
     print(f"⚠️ UI Error: {e}, passing...")
-
+"""
 # --- 🚀 启动阶段 2: 核心加载 ---
 print("DEBUG: Loading Core Systems...")
 from config import settings # 现在 import，能读到刚才注入的变量
@@ -74,6 +74,12 @@ def handle_message(message, say):
 
 if __name__ == "__main__":
     logger.info(f"⚡️ Jarvis Online | Brain: {settings.MODEL_ID}")
+    from core.state import StateManager
+    state_engine = StateManager()
+
+    # 🔥 [测试] 启动时重置一下状态
+    state_engine.update_energy("UNKNOWN") 
+    print(f"DEBUG: Current Focus Mode -> {state_engine.get_state()['strategic_mode']['current_focus']}")
     
     spinal_thread = threading.Thread(target=spinal_loop, daemon=True)
     spinal_thread.start()
