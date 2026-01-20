@@ -1,0 +1,21 @@
+# --- Secrets (绝对不能上传) ---
+.env
+token.json
+credentials.json
+client_secret_*.json
+
+# --- System & Cache ---
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+
+# --- User Data (隐私记忆) ---
+data/memory.json
+data/user_state.json
+data/user_profile.json
+data/long_term_memory.json
+
+# --- IDE Settings ---
+.vscode/
+.idea/
