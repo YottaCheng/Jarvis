@@ -1,79 +1,74 @@
 # core/router.py
-import json
-from google import genai
 from google.genai import types
 from config import settings
 from utils.logger import setup_logger
 from core.state import StateManager
+from core.container import Container
+from services.google_ops import fetch_raw_events
+from utils.formatter import format_calendar_events
+from core.prompts import ROUTER_SYSTEM_PROMPT
+from core.memory import load_history  # 🔥 [NEW] 引入记忆
 
 logger = setup_logger("NeuralRouter")
-client = genai.Client(api_key=settings.GEMINI_KEY)
 
 class NeuralRouter:
     def __init__(self):
         self.state_manager = StateManager()
 
-    def _load_profile(self):
-        """让小脑也能读取你的人设，否则它不知道你是 UCL 的"""
-        profile_path = settings.DATA_DIR / "user_profile.json"
-        try:
-            if profile_path.exists():
-                with open(profile_path, 'r', encoding='utf-8') as f:
-                    return json.dumps(json.load(f), indent=2, ensure_ascii=False)
-        except Exception:
-            return ""
-        return ""
-
     def route_and_execute(self, user_text: str):
+        # 1. 获取状态
         current_state = self.state_manager.get_state()
         energy = current_state["user_physio"]["energy_level"]
         mode = current_state["strategic_mode"]["current_focus"]
-        profile = self._load_profile() # 🔥 注入灵魂
+        
+        # 2. 获取 Profile
+        profile = Container.load_user_profile()
 
-        # 🔥 暴力调教 Prompt
-        router_prompt = f"""
-        [ROLE]
-        You are the 'Subconscious' of Jarvis.
-        Master Profile: {profile}
-        Current State: Energy={energy}, Mode={mode}
-        
-        [INPUT]
-        "{user_text}"
-        
-        [TASK]
-        Classify input and react.
-        
-        OPTION A: CASUAL / VIBE CHECK
-        - Triggers: Greetings, "tired", "boring", short emotions.
-        - ACTION: Reply directly.
-        - TONE: **ENTP, Cynical, Sharp.** - RULE: NO "How can I help". NO "Hope your day is good". NO cringy puns.
-        - CONTENT: Reference his UCL/KCL background or ADHD if relevant. Be a smartass.
-        - FORMAT: Pure text, Chinese (or English if context fits), <30 words.
-        
-        OPTION B: FUNCTIONAL / COMPLEX
-        - Triggers: Calendar, Tasks, Analysis, Long questions.
-        - ACTION: Output exactly: "[[HANDOFF_TO_CORTEX]]"
-        """
+        # 3. 获取静态日程
+        raw_events = fetch_raw_events(hours=24)
+        schedule_summary = format_calendar_events(raw_events)
+
+        # 4. 🔥 [NEW] 获取短期对话历史 (关键修复)
+        # 只取最近 3 条，既省 Token 又能补全上下文
+        # 这样 Gemma 就能看到你上一句说了 "ADHD量表"
+        chat_history = load_history(settings.OWNER_ID, limit=3)
+
+        # 5. 填充 Prompt
+        router_prompt = ROUTER_SYSTEM_PROMPT.format(
+            schedule_summary=schedule_summary,
+            energy=energy,
+            mode=mode,
+            profile=profile,
+            chat_history=chat_history, # 注入历史
+            user_text=user_text
+        )
 
         try:
+            # 6. 调用模型 (保持使用低功耗的 Router Model)
+            client = Container.get_client()
+            
+            # 使用 settings.ROUTER_MODEL (Gemma 3 27B)
+            # 它足够聪明，只要给它上下文
             response = client.models.generate_content(
-                model=settings.ROUTER_MODEL,
+                model=settings.ROUTER_MODEL, 
                 contents=router_prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.8, # 让它更野一点
+                    temperature=0.1, # 🔥 降温：让它更理性，别瞎聊
                     max_output_tokens=100
                 )
             )
             
             result = response.text.strip()
             
+            # 7. 决策分流
             if "[[HANDOFF_TO_CORTEX]]" in result:
-                logger.info("🚦 Intent: COMPLEX -> Routing to Cortex")
-                return None 
+                logger.info("🚦 Intent: SERVICE -> Routing to Cortex")
+                return None  # 让 Agent 接手
             else:
-                logger.info("🟢 Intent: CHAT -> Handled by Router")
+                logger.info("🟢 Intent: CONVERSATION -> The Butler replies")
                 return result 
 
         except Exception as e:
-            logger.error(f"Router Error: {e}")
+            logger.error(f"Router Malfunction: {e}")
+            # 出错默认转人工(大脑)
             return None

@@ -1,99 +1,116 @@
 # core/agent.py
 import json
-from google import genai
+import datetime
 from google.genai import types
 from config import settings
 from utils.logger import setup_logger
 from core.prompts import get_system_prompt
-from core.router import NeuralRouter  # <--- 🔥 新增：引入路由模块
-from services.google_ops import (
-    fetch_calendar_context, create_schedule_event, 
-    search_calendar_events, update_schedule_event, delete_schedule_event,
-    add_task_tool, list_tasks_tool
-)
+from core.router import NeuralRouter
 from core.memory import load_history, save_history
+from core.container import Container  # 🔥 [Core] 接入心脏
+
+# 🔥 [Logic] 数据层与表现层分离
+from services.google_ops import (
+    create_event_data, search_events_data, update_event_data, delete_event_data,
+    add_task_data, list_tasks_data, fetch_raw_events
+)
+from utils.formatter import format_calendar_events, format_tasks
 
 logger = setup_logger("AgentCore")
-client = genai.Client(api_key=settings.GEMINI_KEY)
 
-# 主大脑模型 (Gemini 2.5)
-CORTEX_MODEL = settings.MODEL_ID
-
-# --- 🛠️ 工具定义 (保持原样，严格类型检查) ---
+# --- 🛠️ 工具定义 (Logic Layer: Data -> String) ---
 
 def create_event_tool_wrapper(summary: str, start_time: str = None, duration_hours: float = 1.0, reason: str = ""):
     """创建日程"""
     if not start_time: 
-        import datetime
         start_time = datetime.datetime.now().isoformat()
-    return create_schedule_event(summary, start_time, duration_hours, description=reason)
+    
+    # 1. Action (Data Layer)
+    res = create_event_data(summary, start_time, duration_hours, description=reason)
+    
+    # 2. Presentation (Formatter) - 简单反馈
+    if res:
+        start_display = res['start'].get('dateTime', '')[:16].replace('T', ' ')
+        return f"✅ Created: {res.get('summary')} @ {start_display}"
+    return "❌ Failed to create event (Google API Error)."
 
 def search_calendar_tool_wrapper(query: str):
     """搜索日程"""
-    return search_calendar_events(query)
+    events = search_events_data(query) # List[Dict]
+    return format_calendar_events(events) # String via Formatter
 
 def update_event_tool_wrapper(event_id: str, new_start_time: str = None, new_summary: str = None):
     """更新日程"""
-    return update_schedule_event(event_id, new_start_time, new_summary)
+    patch = {}
+    if new_summary: patch['summary'] = new_summary
+    if new_start_time:
+        if 'T' not in new_start_time: new_start_time = new_start_time.replace(' ', 'T')
+        patch['start'] = {'dateTime': new_start_time, 'timeZone': 'Europe/London'}
+    
+    res = update_event_data(event_id, patch)
+    if res: return f"✅ Updated: {res.get('summary')}"
+    return "❌ Update failed."
 
 def delete_event_tool_wrapper(event_id: str):
     """删除日程"""
-    return delete_schedule_event(event_id)
+    if delete_event_data(event_id):
+        return "✅ Event deleted."
+    return "❌ Delete failed."
 
 def add_task_tool_wrapper(title: str, notes: str = None):
     """添加待办"""
-    return add_task_tool(title, notes)
+    res = add_task_data(title, notes)
+    if res: return f"✅ Task Added: {res.get('title')}"
+    return "❌ Task add failed."
 
 def list_tasks_tool_wrapper():
     """列出待办"""
-    return list_tasks_tool()
+    tasks = list_tasks_data()
+    return format_tasks(tasks) # String via Formatter
 
-def load_user_profile():
-    profile_path = settings.DATA_DIR / "user_profile.json"
-    if profile_path.exists():
-        try:
-            with open(profile_path, 'r', encoding='utf-8') as f:
-                return json.dumps(json.load(f), indent=2, ensure_ascii=False)
-        except Exception: return ""
-    return ""
+# --- 🧠 核心运行逻辑 ---
 
-# --- 🧠 核心运行逻辑 (双脑协同) ---
+def get_context_string():
+    """组合生成实时 Context"""
+    events = fetch_raw_events(hours=24)
+    tasks = list_tasks_data(max_results=5)
+    
+    schedule_str = format_calendar_events(events)
+    tasks_str = format_tasks(tasks)
+    
+    return f"Current Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n[Schedule]\n{schedule_str}\n\n[Top Tasks]\n{tasks_str}"
 
 def run(user_text, user_id="DEFAULT_USER"):
     # =================================================
-    # Layer 1: The Neural Router (小脑 / 潜意识)
+    # Layer 1: The Neural Router (小脑)
     # =================================================
     try:
-        logger.info(f"🏎️  Router Layer Active: {settings.ROUTER_MODEL} (Checking Intent...)")
-        
+        logger.info(f"🏎️  Router Active")
         router = NeuralRouter()
-        # 这里的 fast_response 如果有值，说明是闲聊；如果是 None，说明需要大脑
         fast_response = router.route_and_execute(user_text)
-        
         if fast_response:
-            logger.info("🟢 Router Hit: Fast Path executed.")
-            # 记录小脑的回复
+            logger.info("🟢 Router Hit.")
             save_history(user_id, "User", user_text)
             save_history(user_id, "Jarvis", fast_response)
             return fast_response
-
     except Exception as e:
-        logger.warning(f"⚠️ Router Skipped (Error: {e}). Fallback to Cortex.")
+        logger.warning(f"⚠️ Router Skipped: {e}")
 
     # =================================================
-    # Layer 2: The Cortex (大脑 / 深度思考)
+    # Layer 2: The Cortex (大脑)
     # =================================================
-    logger.info(f"🧠 Cortex Layer Active: {CORTEX_MODEL} (Deep Reasoning...)")
     
     system_prompt = get_system_prompt()
-    context = fetch_calendar_context()
+    context = get_context_string() 
     memory_block = load_history(user_id)
-    user_profile = load_user_profile()
+    
+    # 🔥 [DRY Fix] 统一从 Container 读取 Profile
+    user_profile = Container.load_user_profile()
     
     full_prompt = f"""
     {system_prompt}
     [User Profile] {user_profile}
-    [Context] {context}
+    [Real-time Context] {context}
     [History] {memory_block}
     [Command] {user_text} (Reply in Chinese)
     """
@@ -105,29 +122,24 @@ def run(user_text, user_id="DEFAULT_USER"):
     ]
 
     try:
-        # 调用 Gemini 2.5
-        response = client.models.generate_content(
-            model=CORTEX_MODEL,
+        # 🔥🔥🔥 [Core Feature] 使用 Container 的自动轮换接口
+        # 自动处理 429/503 报错，自动切换模型，且自动加上了 BLOCK_NONE 安全盾
+        response = Container.call_brain(
             contents=full_prompt,
-            config=types.GenerateContentConfig(tools=tool_list, temperature=0.3)
+            tools=tool_list,
+            config=types.GenerateContentConfig(temperature=0.3)
         )
         
         reply_text = ""
         
-        # 处理工具调用
         if response.function_calls:
             tool_results = []
             for call in response.function_calls:
                 name = call.name
                 args = call.args
-                # 路由
+                # 路由分发
                 if name == "create_event_tool_wrapper": 
-                    res = create_event_tool_wrapper(
-                        summary=str(args.get('summary')),
-                        start_time=args.get('start_time'),
-                        duration_hours=float(args.get('duration_hours', 1.0)),
-                        reason=str(args.get('reason', ''))
-                    )
+                    res = create_event_tool_wrapper(args.get('summary'), args.get('start_time'), float(args.get('duration_hours', 1)), args.get('reason', ''))
                 elif name == "search_calendar_tool_wrapper": res = search_calendar_tool_wrapper(args.get('query'))
                 elif name == "update_event_tool_wrapper": res = update_event_tool_wrapper(args.get('event_id'), args.get('new_start_time'), args.get('new_summary'))
                 elif name == "delete_event_tool_wrapper": res = delete_event_tool_wrapper(args.get('event_id'))
@@ -136,15 +148,23 @@ def run(user_text, user_id="DEFAULT_USER"):
                 else: res = f"❌ Unknown Tool"
                 tool_results.append(res)
             
-            reply_text = f"✅ 执行报告:\n" + "\n".join(tool_results)
+            reply_text = f"✅ Execution Report:\n" + "\n".join(tool_results)
         else:
-            reply_text = response.text if response.text else "⚠️ (No output from Cortex)"
+            # 🔥 [Debug] 诊断空回复
+            if response.text:
+                reply_text = response.text
+            else:
+                finish_reason = "UNKNOWN"
+                if response.candidates and response.candidates[0].finish_reason:
+                    finish_reason = response.candidates[0].finish_reason
+                
+                logger.warning(f"⚠️ Empty Response. Finish Reason: {finish_reason}")
+                reply_text = f"⚠️ (No output from Cortex). Finish Reason: {finish_reason}"
 
-        # 记录大脑的回复
         save_history(user_id, "User", user_text)
         save_history(user_id, "Jarvis", reply_text)
         return reply_text
 
     except Exception as e:
-        logger.error(f"Brain Failure ({CORTEX_MODEL}): {e}")
+        logger.error(f"Brain Failure: {e}")
         return f"⚠️ System Malfunction: {str(e)}"
