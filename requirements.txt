@@ -1,5 +1,17 @@
+# 核心框架
 slack_sdk
 slack_bolt
+python-dotenv
+schedule
+
+# Google 全家桶
 google-api-python-client
 google-auth-oauthlib
-python-dotenv
+google-auth-httplib2
+google-genai
+
+# 工具库
+requests
+pytz
+colorama
+termcolor

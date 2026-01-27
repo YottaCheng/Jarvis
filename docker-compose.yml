@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  jarvis:
+    build: .
+    container_name: jarvis_v3
+    restart: always
+    volumes:
+      # 1. 核心密钥与配置 (必须映射，否则无法调用 API)
+      - ./.env:/app/.env
+      - ./credentials.json:/app/credentials.json
+      - ./token.json:/app/token.json
+      
+      # 2. 状态与持久化数据 (必须映射，否则重启即失忆)
+      - ./memory.json:/app/memory.json
+      - ./user_state.json:/app/user_state.json
+      
+      # 3. 文件夹映射 (确保日志和数据有处可写)
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - TZ=Europe/London  # 强制容器使用伦敦时间，对齐你的日程逻辑
