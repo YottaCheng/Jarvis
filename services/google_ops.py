@@ -50,23 +50,50 @@ def get_service(api_name, api_version):
 
 # --- 📅 Calendar (Pure Data) ---
 
+
 def fetch_raw_events(hours=24):
-    """[Read] 获取未来 N 小时的原始事件数据 (List of Dicts)"""
+    """[Read] 获取未来 N 小时的原始事件数据 (支持多日历聚合)"""
     service = get_service('calendar', 'v3')
     if not service: return []
     
     now = datetime.datetime.now().isoformat() + 'Z'
     end = (datetime.datetime.now() + datetime.timedelta(hours=hours)).isoformat() + 'Z'
     
-    try:
-        events_result = service.events().list(
-            calendarId='primary', timeMin=now, timeMax=end,
-            singleEvents=True, orderBy='startTime'
-        ).execute()
-        return events_result.get('items', [])
-    except Exception as e:
-        logger.error(f"Fetch Events Failed: {e}")
-        return []
+    # 你的日历 ID 列表：Primary + UCL
+    # 注意：这里硬编码了你的 UCL ID，这是最快的 MVP 写法
+    CALENDAR_IDS = [
+        'primary', 
+        'nmn991d129v4fjub3s2d303cmjd0ldol@import.calendar.google.com'
+    ]
+    
+    all_events = []
+    
+    for cal_id in CALENDAR_IDS:
+        try:
+            # print(f"DEBUG: Scanning Calendar -> {cal_id}") # 调试用，嫌吵可以注释掉
+            events_result = service.events().list(
+                calendarId=cal_id, 
+                timeMin=now, 
+                timeMax=end,
+                singleEvents=True, 
+                orderBy='startTime'
+            ).execute()
+            
+            items = events_result.get('items', [])
+            
+            # 给事件打个标签，以后你知道这课是哪来的
+            for item in items:
+                item['source_calendar'] = 'UCL' if 'import' in cal_id else 'Personal'
+                all_events.append(item)
+                
+        except Exception as e:
+            logger.error(f"Fetch Events Failed for {cal_id}: {e}")
+            continue # 一个挂了不影响另一个
+            
+    # 按时间重新排序（因为是两个列表合并的，时间可能乱了）
+    all_events.sort(key=lambda x: x['start'].get('dateTime', x['start'].get('date')))
+    
+    return all_events
 
 def search_events_data(query, max_results=5):
     """[Search] 搜索并返回原始数据"""
